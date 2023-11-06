@@ -1,12 +1,56 @@
-import sys
-import math
-import sympy
+import asyncio
+import atexit
+from dask.distributed import Client
 
-target = 2519590847565789349402718324004839857142928212620403202777713783604366202070_7595556264018525880784406918290641249515082189298559149176184502808489120072_8449926873928072877767359714183472702618963750149718246911650776133798590957_0009733045974880842840179742910064245869181719511874612151517265463228221686_9987549182422433637259085141865462043576798423387184774447920739934236584823_8242811981638150106748104516603773060562016196762561338441436038339044149526_3443219011465754445417842402092461651572335077870774981712577246796292638635_6373289912154831438167899885040445364023527381951378636564391212010397122822_120720357
+from state import load_state, dump_state
+from config import TARGET, CHUNK_SIZE, JOB_COUNT
+from private_key_decomposition_job import private_key_decomposition_job
 
-primes_from =  int(sys.argv[1]) if len(sys.argv) > 1 else 2
-primes_to = int(sys.argv[2]) if len(sys.argv) > 2 else math.isqrt(target)
+CHUNK_COUNT = ((TARGET + 1) // 2 + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-prime = sympy.randprime(primes_from, primes_to)
+try:
+    load_state()
+except Exception:
+    print("NO INIT STATE")
 
-print(prime)
+atexit.register(dump_state)
+
+# cluster = LocalCluster()
+
+print(f"TARGET {TARGET}")
+print(f"CHUNK_COUNT {CHUNK_COUNT}")
+print(f"JOB_COUNT {JOB_COUNT}")
+print("================================================================")
+
+
+async def main():
+    client = await Client(asynchronous=True)
+    result = None
+
+    for batch_index in range((CHUNK_COUNT + JOB_COUNT - 1) // JOB_COUNT):
+        print(f"CHUNKS {batch_index * JOB_COUNT}-{(batch_index + 1) * JOB_COUNT}")
+
+        futures = client.map(
+            private_key_decomposition_job(TARGET, CHUNK_SIZE),
+            (
+                chunk_index
+                for chunk_index in range(
+                    batch_index * JOB_COUNT, (batch_index + 1) * JOB_COUNT
+                )
+                if chunk_index < CHUNK_COUNT
+            ),
+        )
+        possible_results = await client.gather(futures, asynchronous=True)
+        print("RR", possible_results)
+        result = next((r for r in possible_results[0] if r is not None), None)
+
+        if result is not None:
+            break
+
+    print(f"RESULT: {result}")
+
+    with open(f"results/{TARGET}.txt", "w", encoding="UTF-8") as result_file:
+        print(result, file=result_file)
+
+
+asyncio.run(main())
